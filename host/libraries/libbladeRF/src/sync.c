@@ -660,6 +660,7 @@ static inline bool timestamp_in_past(struct bladerf_metadata *user_meta,
 
 struct tx_options {
     bool flush;
+    bool zero_pad;
 };
 
 static inline int handle_tx_parameters(struct bladerf_metadata *user_meta,
@@ -671,8 +672,6 @@ static inline int handle_tx_parameters(struct bladerf_metadata *user_meta,
             log_debug("NULL metadata pointer passed to %s\n", __FUNCTION__);
             return BLADERF_ERR_INVAL;
         }
-
-        log_verbose("%s: called for %u samples.\n", __FUNCTION__, num_samples);
 
         if (user_meta->flags & BLADERF_META_FLAG_TX_BURST_START) {
             bool now = user_meta->flags & BLADERF_META_FLAG_TX_NOW;
@@ -695,10 +694,20 @@ static inline int handle_tx_parameters(struct bladerf_metadata *user_meta,
                             (unsigned long long)s->meta.curr_timestamp);
             }
 
+            if (user_meta->flags & BLADERF_META_FLAG_TX_ZERO_PAD) {
+                log_debug("ZERO_PAD ignored; BURST_START flag was used.\n");
+            }
+
         } else if (user_meta->flags & BLADERF_META_FLAG_TX_NOW) {
             log_debug("%s: TX_NOW was specified without BURST_START.\n",
                     __FUNCTION__);
             return BLADERF_ERR_INVAL;
+        } else if (user_meta->flags & BLADERF_META_FLAG_TX_ZERO_PAD) {
+            if (timestamp_in_past(user_meta, s)) {
+                return BLADERF_ERR_TIME_PAST;
+            } else {
+                options->zero_pad = true;
+            }
         }
 
         if (user_meta->flags & BLADERF_META_FLAG_TX_BURST_END) {
@@ -731,7 +740,10 @@ int sync_tx(struct bladerf *dev, void *samples, unsigned int num_samples,
     uint8_t *buf_dest = NULL;
     struct tx_options op = {
         FIELD_INIT(.flush, false),
+        FIELD_INIT(.zero_pad, false),
     };
+
+    log_verbose("%s: called for %u samples.\n", __FUNCTION__, num_samples);
 
     if (s == NULL || samples == NULL) {
         return BLADERF_ERR_INVAL;
@@ -883,9 +895,41 @@ int sync_tx(struct bladerf *dev, void *samples, unsigned int num_samples,
                         break;
 
                     case SYNC_META_STATE_SAMPLES:
-                        samples_to_copy =
-                            uint_min(num_samples - samples_written,
-                                     left_in_msg(s));
+                        if (op.zero_pad) {
+                            const uint64_t delta =
+                                user_meta->timestamp - s->meta.curr_timestamp;
+
+                            size_t to_zero;
+
+                            log_verbose("%s: User requested zero padding to "
+                                        "t=%"PRIu64" + %"PRIu64"\n",
+                                        __FUNCTION__,
+                                        s->meta.curr_timestamp, delta);
+
+                            if (delta < left_in_msg(s)) {
+                                to_zero = (size_t) delta;
+
+                                log_verbose("%s: Padded subset of msg.\n",
+                                            __FUNCTION__);
+                            } else {
+                                to_zero = left_in_msg(s);
+
+                                log_verbose("%s: Padded remainder of msg.\n",
+                                            __FUNCTION__);
+                            }
+
+                            memset(s->meta.curr_msg + METADATA_HEADER_SIZE +
+                                    samples2bytes(s, s->meta.curr_msg_off),
+                                   0, samples2bytes(s, to_zero));
+
+                            s->meta.curr_msg_off += to_zero;
+
+                            s->meta.curr_timestamp = user_meta->timestamp;
+                            op.zero_pad = false;
+                        }
+
+                        samples_to_copy = uint_min(num_samples - samples_written,
+                                                   left_in_msg(s));
 
                         if (samples_to_copy != 0) {
                             /* We have user data to copy into the current

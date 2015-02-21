@@ -1317,6 +1317,25 @@ typedef enum {
 #define BLADERF_META_FLAG_TX_NOW           (1 << 2)
 
 /**
+ * Use this flag within a burst (i.e., between the use of
+ * ::BLADERF_META_FLAG_TX_BURST_START and ::BLADERF_META_FLAG_TX_BURST_END) to
+ * specify that bladerf_sync_tx() should read the bladerf_metadata::timestamp
+ * field and zero-pad samples up to the specified timestamp. The provided
+ * samples will then be transmitted at that timestamp.
+ *
+ * Use this flag when potentially flushing an entire buffer via the
+ * ::BLADERF_META_FLAG_TX_BURST_END would yield an unacceptably large gap.
+ *
+ * In some applications where a transmitter is constantly transmitting
+ * with extremely small gaps (less than a buffer), users may end up using a
+ * single ::BLADERF_META_FLAG_TX_BURST_START, and then numerous calls to
+ * bladerf_sync_tx() with the ::BLADERF_META_FLAG_TX_ZERO_PAD
+ * flag set.  The ::BLADERF_META_FLAG_TX_BURST_END would only be used to end
+ * the stream when shutting down.
+ */
+#define BLADERF_META_FLAG_TX_ZERO_PAD (1 << 3)
+
+/**
  * This flag indicates that calls to bladerf_sync_rx should return any available
  * samples, rather than wait until the timestamp indicated in the
  * bladerf_metadata timestamp field.
